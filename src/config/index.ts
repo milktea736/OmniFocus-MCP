@@ -27,13 +27,21 @@ export function loadConfig(): Config {
       corsOrigins: process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3000']
     };
     
+    const sessionSecret = process.env.SESSION_SECRET || 'change-me-in-production';
+    
+    // Warn if using default session secret
+    if (sessionSecret === 'change-me-in-production') {
+      console.error('WARNING: Using default session secret. Generate a secure random secret for production!');
+      console.error('Generate one with: openssl rand -hex 32');
+    }
+    
     config.oauth = {
       github: {
         clientId: process.env.GITHUB_CLIENT_ID!,
         clientSecret: process.env.GITHUB_CLIENT_SECRET!,
         callbackURL: process.env.GITHUB_CALLBACK_URL || 'http://localhost:3000/auth/github/callback'
       },
-      sessionSecret: process.env.SESSION_SECRET || 'change-me-in-production'
+      sessionSecret
     };
     
     // Validate required config

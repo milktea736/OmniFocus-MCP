@@ -67,7 +67,13 @@ function isUserAllowed(user: GitHubUser): boolean {
     return true;
   }
   
-  // TODO: Check organization membership (requires additional API call)
+  // Note: Organization membership checking requires additional GitHub API calls
+  // and is not currently implemented. If you need org-based access control,
+  // you'll need to implement a separate check using the GitHub API with the
+  // access token provided to the OAuth callback.
+  if (allowedOrgs.length > 0) {
+    console.error('WARNING: ALLOWED_GITHUB_ORGS is configured but organization checking is not implemented');
+  }
   
   return false;
 }

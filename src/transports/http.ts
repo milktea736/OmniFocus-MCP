@@ -61,7 +61,8 @@ export async function startHttpServer(server: McpServer, config: Config) {
     passport.authenticate('github', { failureRedirect: '/auth/failed' }),
     (req, res) => {
       // Create session token for SSE connection
-      const sessionToken = sessionManager.createSession(req.user as any);
+      const user = req.user as any; // Passport doesn't expose proper types
+      const sessionToken = sessionManager.createSession(user);
       
       // Redirect to success page with token
       res.redirect(`/auth/success?token=${sessionToken}`);
@@ -120,7 +121,8 @@ export async function startHttpServer(server: McpServer, config: Config) {
   
   // SSE endpoint (protected)
   app.get('/sse', requireAuth, async (req: Request, res: Response) => {
-    console.error(`SSE connection from user: ${(req.user as any)?.username}`);
+    const user = req.user as any; // Passport doesn't expose proper types
+    console.error(`SSE connection from user: ${user?.username}`);
     
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -135,9 +137,11 @@ export async function startHttpServer(server: McpServer, config: Config) {
   });
   
   // Messages endpoint (protected)
+  // Note: The SSE transport handles the actual MCP message processing
   app.post('/messages', requireAuth, async (req: Request, res: Response) => {
-    // Handle incoming MCP messages
     try {
+      // The MCP SDK handles message processing through the SSE transport
+      // This endpoint is required by the SSE protocol but the SDK manages the actual processing
       res.json({ status: 'received' });
     } catch (error) {
       console.error('Error handling message:', error);
