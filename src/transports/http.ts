@@ -3,6 +3,7 @@ import session from 'express-session';
 import passport from 'passport';
 import cors from 'cors';
 import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Config } from '../config/index.js';
@@ -17,9 +18,14 @@ export async function startHttpServer(server: McpServer, config: Config) {
   
   const app = express();
   
-  // Security middleware
+  // Security middleware - configure helmet with necessary exceptions for SSE
   app.use(helmet({
-    contentSecurityPolicy: false // Required for SSE
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        connectSrc: ["'self'"] // Allow SSE connections to same origin
+      }
+    }
   }));
   
   app.use(cors({
@@ -46,6 +52,15 @@ export async function startHttpServer(server: McpServer, config: Config) {
   app.use(passport.initialize());
   app.use(passport.session());
   setupGitHubOAuth(config);
+  
+  // Rate limiting for authenticated endpoints
+  const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each authenticated user to 100 requests per windowMs
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: 'Too many requests, please try again later.'
+  });
   
   // ============ Routes ============
   
@@ -119,8 +134,8 @@ export async function startHttpServer(server: McpServer, config: Config) {
     });
   });
   
-  // SSE endpoint (protected)
-  app.get('/sse', requireAuth, async (req: Request, res: Response) => {
+  // SSE endpoint (protected with rate limiting)
+  app.get('/sse', apiLimiter, requireAuth, async (req: Request, res: Response) => {
     const user = req.user as any; // Passport doesn't expose proper types
     console.error(`SSE connection from user: ${user?.username}`);
     
@@ -136,9 +151,9 @@ export async function startHttpServer(server: McpServer, config: Config) {
     });
   });
   
-  // Messages endpoint (protected)
+  // Messages endpoint (protected with rate limiting)
   // Note: The SSE transport handles the actual MCP message processing
-  app.post('/messages', requireAuth, async (req: Request, res: Response) => {
+  app.post('/messages', apiLimiter, requireAuth, async (req: Request, res: Response) => {
     try {
       // The MCP SDK handles message processing through the SSE transport
       // This endpoint is required by the SSE protocol but the SDK manages the actual processing
