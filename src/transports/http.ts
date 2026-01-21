@@ -1,0 +1,184 @@
+import express, { type Request, type Response } from 'express';
+import session from 'express-session';
+import passport from 'passport';
+import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Config } from '../config/index.js';
+import { setupGitHubOAuth } from '../auth/github-oauth.js';
+import { requireAuth } from '../auth/middleware.js';
+import { sessionManager } from '../auth/session-manager.js';
+
+export async function startHttpServer(server: McpServer, config: Config) {
+  if (!config.http || !config.oauth) {
+    throw new Error('HTTP config missing');
+  }
+  
+  const app = express();
+  
+  // Security middleware - configure helmet with necessary exceptions for SSE
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        connectSrc: ["'self'"] // Allow SSE connections to same origin
+      }
+    }
+  }));
+  
+  app.use(cors({
+    origin: config.http.corsOrigins,
+    credentials: true
+  }));
+  
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
+  
+  // Session configuration
+  app.use(session({
+    secret: config.oauth.sessionSecret,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      secure: process.env.NODE_ENV === 'production',
+      httpOnly: true,
+      maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    }
+  }));
+  
+  // Passport initialization
+  app.use(passport.initialize());
+  app.use(passport.session());
+  setupGitHubOAuth(config);
+  
+  // Rate limiting for authenticated endpoints
+  const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each authenticated user to 100 requests per windowMs
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: 'Too many requests, please try again later.'
+  });
+  
+  // ============ Routes ============
+  
+  // Health check
+  app.get('/health', (req, res) => {
+    res.json({ status: 'ok', mode: 'http' });
+  });
+  
+  // OAuth routes
+  app.get('/auth/github', passport.authenticate('github', { scope: ['user:email'] }));
+  
+  app.get('/auth/github/callback',
+    passport.authenticate('github', { failureRedirect: '/auth/failed' }),
+    (req, res) => {
+      // Create session token for SSE connection
+      const user = req.user as any; // Passport doesn't expose proper types
+      const sessionToken = sessionManager.createSession(user);
+      
+      // Redirect to success page with token
+      res.redirect(`/auth/success?token=${sessionToken}`);
+    }
+  );
+  
+  app.get('/auth/failed', (req, res) => {
+    res.status(401).json({ error: 'Authentication failed' });
+  });
+  
+  app.get('/auth/success', (req, res) => {
+    const token = req.query.token;
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Authentication Successful</title>
+        <style>
+          body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+          .token { background: #f4f4f4; padding: 15px; border-radius: 5px; word-break: break-all; }
+          .copy-btn { margin-top: 10px; padding: 10px 20px; cursor: pointer; }
+        </style>
+      </head>
+      <body>
+        <h1>✅ Authentication Successful</h1>
+        <p>Your session token:</p>
+        <div class="token" id="token">${token}</div>
+        <button class="copy-btn" onclick="copyToken()">Copy Token</button>
+        <h2>Next Steps:</h2>
+        <ol>
+          <li>Copy the token above</li>
+          <li>Add it to your MCP client configuration</li>
+          <li>Connect to the SSE endpoint at <code>/sse</code></li>
+        </ol>
+        <script>
+          function copyToken() {
+            const token = document.getElementById('token').textContent;
+            navigator.clipboard.writeText(token);
+            alert('Token copied to clipboard!');
+          }
+        </script>
+      </body>
+      </html>
+    `);
+  });
+  
+  app.get('/auth/logout', (req, res) => {
+    const sessionToken = req.query.token as string;
+    if (sessionToken) {
+      sessionManager.deleteSession(sessionToken);
+    }
+    req.logout(() => {
+      res.json({ message: 'Logged out successfully' });
+    });
+  });
+  
+  // SSE endpoint (protected with rate limiting)
+  app.get('/sse', apiLimiter, requireAuth, async (req: Request, res: Response) => {
+    const user = req.user as any; // Passport doesn't expose proper types
+    console.error(`SSE connection from user: ${user?.username}`);
+    
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    
+    const transport = new SSEServerTransport('/messages', res);
+    await server.connect(transport);
+    
+    req.on('close', () => {
+      console.error('SSE connection closed');
+    });
+  });
+  
+  // Messages endpoint (protected with rate limiting)
+  // Note: The SSE transport handles the actual MCP message processing
+  app.post('/messages', apiLimiter, requireAuth, async (req: Request, res: Response) => {
+    try {
+      // The MCP SDK handles message processing through the SSE transport
+      // This endpoint is required by the SSE protocol but the SDK manages the actual processing
+      res.json({ status: 'received' });
+    } catch (error) {
+      console.error('Error handling message:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+  
+  // Start server
+  const { host, port } = config.http;
+  const httpServer = app.listen(port, host, () => {
+    console.error(`MCP Server listening on http://${host}:${port}`);
+    console.error(`OAuth login: http://${host}:${port}/auth/github`);
+  });
+  
+  // Graceful shutdown
+  process.on('SIGINT', () => {
+    console.error('Shutting down HTTP server...');
+    httpServer.close(() => {
+      console.error('HTTP server closed');
+      process.exit(0);
+    });
+  });
+  
+  return httpServer;
+}

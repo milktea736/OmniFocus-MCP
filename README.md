@@ -27,10 +27,16 @@ Some ways you could use it:
 
 ## 🚀 Quick Start
 
+The OmniFocus MCP server supports two modes:
+- **stdio mode** (default) - For local use with Claude Desktop
+- **HTTP mode** - For remote access with GitHub OAuth authentication
+
 ### Prerequisites
 - macOS with OmniFocus installed
 
-### Connecting to Claude
+### stdio Mode (Local Use)
+
+#### Connecting to Claude
 
 1. In Claude Desktop, add this MCP server to your configuration file at:
 ```
@@ -50,6 +56,124 @@ Some ways you could use it:
 ```
 
 3. Restart Claude Desktop
+
+### HTTP Mode (Remote Access)
+
+HTTP mode allows you to run the MCP server as a web service with GitHub OAuth authentication, enabling remote access and multi-user scenarios.
+
+#### Setup GitHub OAuth App
+
+1. Go to GitHub Settings → Developer settings → OAuth Apps → New OAuth App
+2. Fill in the details:
+   - **Application name**: OmniFocus MCP Server
+   - **Homepage URL**: `http://localhost:3000` (or your domain)
+   - **Authorization callback URL**: `http://localhost:3000/auth/github/callback`
+3. Save the **Client ID** and generate a **Client Secret**
+
+#### Configure Environment Variables
+
+1. Copy the example environment file:
+```bash
+cp .env.example .env
+```
+
+2. Edit `.env` with your settings:
+```bash
+# Set mode to HTTP
+MCP_MODE=http
+
+# Server configuration
+PORT=3000
+HOST=0.0.0.0
+CORS_ORIGINS=http://localhost:3000,https://yourdomain.com
+
+# GitHub OAuth credentials (from previous step)
+GITHUB_CLIENT_ID=your_github_client_id
+GITHUB_CLIENT_SECRET=your_github_client_secret
+GITHUB_CALLBACK_URL=http://localhost:3000/auth/github/callback
+
+# Generate a random secret (use: openssl rand -hex 32)
+SESSION_SECRET=your_random_secret_key_here
+
+# Optional: Restrict access to specific users/orgs
+# ALLOWED_GITHUB_USERS=username1,username2
+# ALLOWED_GITHUB_ORGS=org1,org2
+```
+
+#### Start the Server
+
+```bash
+npm install
+npm run build
+npm start
+```
+
+The server will start on `http://localhost:3000`
+
+#### Authentication Flow
+
+1. Open your browser and navigate to: `http://localhost:3000/auth/github`
+2. Authorize the application with GitHub
+3. Copy the session token from the success page
+4. Use the token in your MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "omnifocus-http": {
+      "url": "http://localhost:3000/sse",
+      "headers": {
+        "X-Session-Token": "your-session-token-here"
+      }
+    }
+  }
+}
+```
+
+#### HTTP Mode Endpoints
+
+- `GET /health` - Health check endpoint
+- `GET /auth/github` - Initiate GitHub OAuth flow
+- `GET /auth/github/callback` - OAuth callback
+- `GET /auth/success` - Authentication success page with token
+- `GET /auth/logout?token=<session-token>` - Logout
+- `GET /sse` - SSE connection endpoint (requires authentication)
+- `POST /messages` - MCP message endpoint (requires authentication)
+
+#### Security Considerations
+
+**For Production Deployment:**
+
+1. **Use HTTPS**: Always use HTTPS in production
+   ```bash
+   # Update callback URL
+   GITHUB_CALLBACK_URL=https://yourdomain.com/auth/github/callback
+   ```
+
+2. **Secure Session Secret**: Generate a strong random secret
+   ```bash
+   openssl rand -hex 32
+   ```
+
+3. **Configure CORS**: Restrict origins to trusted domains
+   ```bash
+   CORS_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
+   ```
+
+4. **User Whitelist**: Restrict access to specific users or organizations
+   ```bash
+   ALLOWED_GITHUB_USERS=user1,user2
+   ALLOWED_GITHUB_ORGS=myorg
+   ```
+
+5. **Environment Variables**: Never commit `.env` file (already in `.gitignore`)
+
+6. **Session Duration**: Sessions expire after 24 hours (configurable in code)
+
+7. **Set NODE_ENV**: Set to production for secure cookies
+   ```bash
+   NODE_ENV=production
+   ```
 
 ## Use Cases
 
@@ -248,3 +372,55 @@ This server uses AppleScript to communicate with OmniFocus, allowing it to inter
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+## 🐛 Troubleshooting
+
+### stdio Mode
+
+**Issue**: MCP server not appearing in Claude Desktop
+- Verify the configuration file path is correct
+- Check that the JSON syntax is valid
+- Restart Claude Desktop after making changes
+- Check Claude Desktop logs for errors
+
+**Issue**: AppleScript permission errors
+- Grant Claude Desktop "Automation" permission in System Preferences → Security & Privacy → Privacy
+- Ensure OmniFocus is running
+
+### HTTP Mode
+
+**Issue**: "GitHub OAuth credentials are required in HTTP mode"
+- Verify `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are set in `.env`
+- Make sure you're loading the `.env` file correctly
+- Check that `.env` is in the root directory
+
+**Issue**: OAuth callback fails
+- Verify `GITHUB_CALLBACK_URL` matches the one configured in GitHub OAuth App
+- Ensure the callback URL is accessible (use `http://localhost:3000/auth/github/callback` for local testing)
+- Check that the port matches your `PORT` setting
+
+**Issue**: "Unauthorized" when connecting to SSE endpoint
+- Verify you've completed the OAuth flow and obtained a session token
+- Check that the `X-Session-Token` header is included in requests
+- Session tokens expire after 24 hours - obtain a new token if needed
+
+**Issue**: CORS errors in browser
+- Add your domain to `CORS_ORIGINS` environment variable
+- Restart the server after changing environment variables
+- Verify the origin includes the protocol (http:// or https://)
+
+**Issue**: Session token not working
+- Verify the token hasn't expired (24-hour lifetime)
+- Check that you're using the correct token from the success page
+- Ensure no whitespace or extra characters in the token
+
+**Issue**: "User not authorized" during OAuth
+- Check if `ALLOWED_GITHUB_USERS` or `ALLOWED_GITHUB_ORGS` are configured
+- Verify your GitHub username is in the allowed list (case-sensitive)
+- Remove whitelist variables to allow all authenticated users
+
+**General Tips:**
+- Check server logs (stderr) for detailed error messages
+- Use `curl` to test HTTP endpoints directly
+- Verify all required environment variables are set
+- Test with stdio mode first to ensure core functionality works

@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 
+import 'dotenv/config';
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { loadConfig } from './config/index.js';
+import { startStdioServer } from './transports/stdio.js';
+import { startHttpServer } from './transports/http.js';
 
 // Import tool definitions
 import * as dumpDatabaseTool from './tools/definitions/dumpDatabase.js';
@@ -18,7 +21,7 @@ import * as getPerspectiveViewTool from './tools/definitions/getPerspectiveView.
 // Create an MCP server
 const server = new McpServer({
   name: "OmniFocus MCP",
-  version: "1.0.0"
+  version: "2.0.0"
 });
 
 // Register tools
@@ -92,18 +95,20 @@ server.tool(
   getPerspectiveViewTool.handler
 );
 
-// Start the MCP server
-const transport = new StdioServerTransport();
-
-// Use await with server.connect to ensure proper connection
+// Start the MCP server in the appropriate mode
 (async function() {
   try {
-    console.error("Starting MCP server...");
-    await server.connect(transport);
-    console.error("MCP Server connected and ready to accept commands from Claude");
+    const config = loadConfig();
+    
+    if (config.mode === 'http') {
+      console.error('Starting MCP server in HTTP mode...');
+      await startHttpServer(server, config);
+    } else {
+      console.error('Starting MCP server in stdio mode...');
+      await startStdioServer(server);
+    }
   } catch (err) {
     console.error(`Failed to start MCP server: ${err}`);
+    process.exit(1);
   }
 })();
-
-// For a cleaner shutdown if the process is terminated
